@@ -18,8 +18,8 @@ static int read_int(const char *prompt) {
     return v;
 }
 
-static void today(char *out) {
-    time_t t = time(NULL);
+static void date_offset(char *out, int days_ago) {
+    time_t t = time(NULL) - (time_t)days_ago * 86400;
     strftime(out, 11, "%Y-%m-%d", localtime(&t));
 }
 
@@ -40,11 +40,12 @@ static void record_meal(const Food *foods, int n) {
 
     Meal m;
     char buf[64];
-    printf("날짜 (엔터=오늘, 예: 2026-11-10): ");
+    printf("날짜 (엔터=오늘, y=어제, 또는 2026-11-10): ");
     if (!fgets(buf, sizeof buf, stdin)) return;
     buf[strcspn(buf, "\r\n")] = '\0';
     int y, mo, d;
-    if (buf[0] == '\0') today(m.date);
+    if (buf[0] == '\0') date_offset(m.date, 0);
+    else if (buf[0] == 'y' || buf[0] == 'Y') date_offset(m.date, 1);
     else if (strlen(buf) == 10 && sscanf(buf, "%d-%d-%d", &y, &mo, &d) == 3)
         strcpy(m.date, buf);
     else { printf("날짜 형식이 잘못되었습니다.\n"); return; }
