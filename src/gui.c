@@ -290,7 +290,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_nf = load_foods(FOODS_PATH, &g_foods);
         if (g_nf < 0) {
             MessageBoxW(hwnd, L"data/foods.txt를 불러오지 못했습니다.\n"
-                              L"프로젝트 폴더에서 실행했는지 확인하세요.",
+                              L"exe 파일이 data 폴더와 같은 위치에 있는지 확인하세요.",
                         L"오류", MB_OK | MB_ICONERROR);
             return -1;
         }
@@ -381,6 +381,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
     (void)hPrev; (void)cmd;
+
+    /* Move to the folder that contains the exe, so data/ is found
+       no matter how the program is launched (double-click, shortcut). */
+    wchar_t exe[MAX_PATH];
+    if (GetModuleFileNameW(NULL, exe, MAX_PATH) > 0) {
+        wchar_t *slash = wcsrchr(exe, L'\\');
+        if (slash) {
+            *slash = L'\0';
+            SetCurrentDirectoryW(exe);
+        }
+    }
 
     WNDCLASSEXW wc = {0};
     wc.cbSize = sizeof wc;
