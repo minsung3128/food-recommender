@@ -16,4 +16,7 @@ typedef struct {
    Returns the number of foods, or -1 on error. Caller must free(*out). */
 int load_foods(const char *path, Food **out);
 
+/* Writes all foods to a CSV file (overwrites). Returns 0 on success. */
+int save_foods(const char *path, const Food *foods, int n);
+
 #endif

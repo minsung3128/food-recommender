@@ -34,3 +34,13 @@ int load_foods(const char *path, Food **out) {
     *out = arr;
     return n;
 }
+
+int save_foods(const char *path, const Food *foods, int n) {
+    FILE *fp = fopen(path, "w");
+    if (!fp) return -1;
+    for (int i = 0; i < n; i++)
+        fprintf(fp, "%s,%s,%s,%s,%d\n", foods[i].name, foods[i].category,
+                foods[i].ingredient, foods[i].cooking, foods[i].kcal);
+    fclose(fp);
+    return 0;
+}
