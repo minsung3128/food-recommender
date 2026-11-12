@@ -16,6 +16,7 @@ Windows may show a SmartScreen warning because the program is not code-signed. C
 - Adds, edits, and deletes foods from the GUI; changes are saved to `data/foods.txt`
 - Console menu and Win32 GUI (buttons, list box, drop-down boxes)
 - The GUI starts from the exe's own folder, so a double click or a shortcut works
+- Sortable food table: click a column header to sort (click again to reverse)
 
 ## 1. Motivation
 TBD
@@ -94,7 +95,6 @@ TBD
 
 ### Known Limitations
 - History records refer to foods by name, so renaming or deleting a food leaves its old records unmatched; the recommender ignores them.
-- Long rows in the GUI food list are cut off on the right side.
 
 ### Planned Work
 - Simulation test mode with a virtual user, to analyze how recommendations change over 30 days
@@ -116,7 +116,7 @@ Run all commands from the project root folder, because the data files are opened
 
 GUI version:
 ```
-gcc -Iinclude src/gui.c src/food.c src/meal.c src/recommend.c -o foodrec_gui.exe -mwindows -static
+gcc -Iinclude src/gui.c src/food.c src/meal.c src/recommend.c -o foodrec_gui.exe -mwindows -static -lcomctl32
 .\foodrec_gui.exe
 ```
 
@@ -127,7 +127,8 @@ gcc -Iinclude src/main.c src/food.c src/meal.c src/recommend.c -o main.exe
 ```
 
 ## How to Use (GUI)
-1. Click a food in the list on the left.
+1. Click a food in the list on the left. 
+    (Click a column title such as the name or calories to sort the list.)
 2. Choose a rating and a date (today, yesterday, or 2 days ago) from the drop-down boxes.
 3. Click "식사 기록 추가" to save the meal.
 4. Click "오늘의 추천 보기" to see the top 3 recommendations with score details.

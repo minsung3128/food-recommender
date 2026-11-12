@@ -1,6 +1,7 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include <commctrl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,8 @@ static Food *g_foods = NULL;
 static int g_nf = 0;
 static HWND hList, hRating, hDate, hOut;
 static HWND hFName, hFCat, hFIng, hFCook, hFKcal;
+static int g_sort_col = -1;
+static int g_sort_asc = 1;
 
 static void date_offset(char *out, int days_ago) {
     time_t t = time(NULL) - (time_t)days_ago * 86400;
@@ -43,26 +46,68 @@ static void set_text(HWND h, const char *s) {
     free(w);
 }
 
-static void list_add(HWND h, const char *s) {
+/* ---------- food table (list view) ---------- */
+
+static int get_sel(void) {
+    return (int)SendMessageW(hList, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+}
+
+static void select_item(int i) {
+    LVITEMW it;
+    memset(&it, 0, sizeof it);
+    it.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+    it.state = LVIS_SELECTED | LVIS_FOCUSED;
+    SendMessageW(hList, LVM_SETITEMSTATE, i, (LPARAM)&it);
+    SendMessageW(hList, LVM_ENSUREVISIBLE, i, FALSE);
+}
+
+static void set_cell(int row, int col, const char *s) {
     wchar_t *w = to_wide(s);
     if (!w) return;
-    SendMessageW(h, LB_ADDSTRING, 0, (LPARAM)w);
+    LVITEMW it;
+    memset(&it, 0, sizeof it);
+    it.iSubItem = col;
+    it.pszText = w;
+    SendMessageW(hList, LVM_SETITEMTEXTW, row, (LPARAM)&it);
     free(w);
 }
 
-/* ---------- food list helpers ---------- */
-
 static void refresh_list(int select) {
-    SendMessageW(hList, LB_RESETCONTENT, 0, 0);
+    SendMessageW(hList, LVM_DELETEALLITEMS, 0, 0);
     for (int i = 0; i < g_nf; i++) {
-        char line[256];
-        snprintf(line, sizeof line, "%s | %s | %s | %s | %d kcal",
-                 g_foods[i].name, g_foods[i].category,
-                 g_foods[i].ingredient, g_foods[i].cooking, g_foods[i].kcal);
-        list_add(hList, line);
+        wchar_t *w = to_wide(g_foods[i].name);
+        if (!w) continue;
+        LVITEMW it;
+        memset(&it, 0, sizeof it);
+        it.mask = LVIF_TEXT;
+        it.iItem = i;
+        it.iSubItem = 0;
+        it.pszText = w;
+        SendMessageW(hList, LVM_INSERTITEMW, 0, (LPARAM)&it);
+        free(w);
+
+        char k[16];
+        set_cell(i, 1, g_foods[i].category);
+        set_cell(i, 2, g_foods[i].ingredient);
+        set_cell(i, 3, g_foods[i].cooking);
+        snprintf(k, sizeof k, "%d", g_foods[i].kcal);
+        set_cell(i, 4, k);
     }
-    if (select >= 0 && select < g_nf)
-        SendMessageW(hList, LB_SETCURSEL, select, 0);
+    if (select >= 0 && select < g_nf) select_item(select);
+}
+
+static int cmp_food(const void *a, const void *b) {
+    const Food *x = a, *y = b;
+    int r;
+    switch (g_sort_col) {
+    case 1:  r = strcmp(x->category, y->category); break;
+    case 2:  r = strcmp(x->ingredient, y->ingredient); break;
+    case 3:  r = strcmp(x->cooking, y->cooking); break;
+    case 4:  r = (x->kcal > y->kcal) - (x->kcal < y->kcal); break;
+    default: r = strcmp(x->name, y->name); break;
+    }
+    if (r == 0) r = strcmp(x->name, y->name);
+    return g_sort_asc ? r : -r;
 }
 
 static void clear_fields(void) {
@@ -82,6 +127,23 @@ static void fill_fields(int sel) {
     set_text(hFCook, g_foods[sel].cooking);
     snprintf(k, sizeof k, "%d", g_foods[sel].kcal);
     set_text(hFKcal, k);
+}
+
+static void on_sort(int col) {
+    static const char *names[] = { "이름", "분류", "주재료", "조리법", "칼로리" };
+    if (col < 0 || col > 4) return;
+    if (col == g_sort_col) g_sort_asc = !g_sort_asc;
+    else { g_sort_col = col; g_sort_asc = 1; }
+
+    qsort(g_foods, g_nf, sizeof(Food), cmp_food);
+    refresh_list(-1);
+    clear_fields();
+
+    char msg[256];
+    snprintf(msg, sizeof msg,
+             "'%s' 기준 %s 정렬했습니다.\r\n같은 제목을 다시 클릭하면 순서가 바뀝니다.",
+             names[col], g_sort_asc ? "오름차순으로" : "내림차순으로");
+    set_text(hOut, msg);
 }
 
 /* Reads an edit box as UTF-8. Returns 0 if empty, too long, or has a comma. */
@@ -119,6 +181,8 @@ static int find_by_name(const char *name, int skip) {
     return -1;
 }
 
+/* ---------- food management ---------- */
+
 static void on_food_add(void) {
     Food f;
     if (!read_food_fields(&f)) return;
@@ -141,8 +205,8 @@ static void on_food_add(void) {
 }
 
 static void on_food_edit(void) {
-    int sel = (int)SendMessageW(hList, LB_GETCURSEL, 0, 0);
-    if (sel == LB_ERR) {
+    int sel = get_sel();
+    if (sel < 0) {
         set_text(hOut, "수정할 음식을 목록에서 먼저 클릭하세요.");
         return;
     }
@@ -168,8 +232,8 @@ static void on_food_edit(void) {
 }
 
 static void on_food_del(void) {
-    int sel = (int)SendMessageW(hList, LB_GETCURSEL, 0, 0);
-    if (sel == LB_ERR) {
+    int sel = get_sel();
+    if (sel < 0) {
         set_text(hOut, "삭제할 음식을 목록에서 먼저 클릭하세요.");
         return;
     }
@@ -195,8 +259,8 @@ static void on_food_del(void) {
 /* ---------- meal history and recommendation ---------- */
 
 static void on_add(void) {
-    int sel = (int)SendMessageW(hList, LB_GETCURSEL, 0, 0);
-    if (sel == LB_ERR) {
+    int sel = get_sel();
+    if (sel < 0) {
         set_text(hOut, "먼저 왼쪽 목록에서 먹은 음식을 클릭하세요.");
         return;
     }
@@ -295,30 +359,44 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return -1;
         }
 
-        make_label(hwnd, L"음식 목록 (클릭해서 선택)", 10, 8, 300);
-        hList = CreateWindowExW(0, L"LISTBOX", NULL,
-            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-            10, 30, 310, 380, hwnd, (HMENU)(INT_PTR)ID_LIST, NULL, NULL);
+        make_label(hwnd, L"음식 목록 (클릭해서 선택, 열 제목을 클릭하면 정렬)", 10, 8, 450);
+        hList = CreateWindowExW(0, L"SysListView32", NULL,
+            WS_CHILD | WS_VISIBLE | WS_BORDER |
+            LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+            10, 30, 450, 380, hwnd, (HMENU)(INT_PTR)ID_LIST, NULL, NULL);
+        SendMessageW(hList, LVM_SETEXTENDEDLISTVIEWSTYLE, 0,
+                     LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
 
-        make_label(hwnd, L"별점", 340, 8, 100);
+        static const wchar_t *cols[] = { L"이름", L"분류", L"주재료", L"조리법", L"칼로리" };
+        static const int widths[] = { 130, 60, 85, 70, 65 };
+        for (int i = 0; i < 5; i++) {
+            LVCOLUMNW c;
+            memset(&c, 0, sizeof c);
+            c.mask = LVCF_TEXT | LVCF_WIDTH;
+            c.pszText = (LPWSTR)cols[i];
+            c.cx = widths[i];
+            SendMessageW(hList, LVM_INSERTCOLUMNW, i, (LPARAM)&c);
+        }
+
+        make_label(hwnd, L"별점", 480, 8, 100);
         hRating = CreateWindowExW(0, L"COMBOBOX", NULL,
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST,
-            340, 30, 150, 200, hwnd, (HMENU)(INT_PTR)ID_RATING, NULL, NULL);
+            480, 30, 150, 200, hwnd, (HMENU)(INT_PTR)ID_RATING, NULL, NULL);
 
-        make_label(hwnd, L"날짜", 510, 8, 100);
+        make_label(hwnd, L"날짜", 650, 8, 100);
         hDate = CreateWindowExW(0, L"COMBOBOX", NULL,
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST,
-            510, 30, 150, 200, hwnd, (HMENU)(INT_PTR)ID_DATE, NULL, NULL);
+            650, 30, 150, 200, hwnd, (HMENU)(INT_PTR)ID_DATE, NULL, NULL);
 
-        make_button(hwnd, L"식사 기록 추가", ID_ADD, 340, 75, 120, 34);
-        make_button(hwnd, L"오늘의 추천 보기", ID_REC, 470, 75, 130, 34);
-        make_button(hwnd, L"기록 보기", ID_HIST, 610, 75, 110, 34);
+        make_button(hwnd, L"식사 기록 추가", ID_ADD, 480, 75, 120, 34);
+        make_button(hwnd, L"오늘의 추천 보기", ID_REC, 610, 75, 130, 34);
+        make_button(hwnd, L"기록 보기", ID_HIST, 750, 75, 110, 34);
 
-        make_label(hwnd, L"결과", 340, 125, 100);
+        make_label(hwnd, L"결과", 480, 125, 100);
         hOut = CreateWindowExW(0, L"EDIT", NULL,
             WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
             ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-            340, 147, 380, 263, hwnd, NULL, NULL, NULL);
+            480, 147, 380, 263, hwnd, NULL, NULL, NULL);
 
         /* food management */
         make_label(hwnd, L"음식 관리 (목록에서 음식을 클릭하면 아래 칸에 채워집니다)",
@@ -357,12 +435,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         EnumChildWindows(hwnd, set_font_proc, (LPARAM)font);
         return 0;
     }
+    case WM_NOTIFY: {
+        NMHDR *nh = (NMHDR *)lp;
+        if (nh->hwndFrom == hList) {
+            NMLISTVIEW *nl = (NMLISTVIEW *)lp;
+            if (nh->code == LVN_ITEMCHANGED) {
+                if ((nl->uChanged & LVIF_STATE) && (nl->uNewState & LVIS_SELECTED))
+                    fill_fields(nl->iItem);
+            } else if (nh->code == LVN_COLUMNCLICK) {
+                on_sort(nl->iSubItem);
+            }
+        }
+        return 0;
+    }
     case WM_COMMAND:
         switch (LOWORD(wp)) {
-        case ID_LIST:
-            if (HIWORD(wp) == LBN_SELCHANGE)
-                fill_fields((int)SendMessageW(hList, LB_GETCURSEL, 0, 0));
-            break;
         case ID_ADD:   on_add();       break;
         case ID_REC:   on_rec();       break;
         case ID_HIST:  on_hist();      break;
@@ -393,6 +480,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
         }
     }
 
+    INITCOMMONCONTROLSEX icc;
+    icc.dwSize = sizeof icc;
+    icc.dwICC = ICC_LISTVIEW_CLASSES;
+    InitCommonControlsEx(&icc);
+
     WNDCLASSEXW wc = {0};
     wc.cbSize = sizeof wc;
     wc.lpfnWndProc = WndProc;
@@ -404,7 +496,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show) {
 
     HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"음식 추천 프로그램",
         WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-        CW_USEDEFAULT, CW_USEDEFAULT, 750, 600, NULL, NULL, hInst, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 890, 600, NULL, NULL, hInst, NULL);
     if (!hwnd) return 1;
 
     ShowWindow(hwnd, show);
