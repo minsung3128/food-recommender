@@ -15,4 +15,7 @@ int load_meals(const char *path, Meal **out);
 /* Appends one meal to the file. Returns 0 on success. */
 int append_meal(const char *path, const Meal *m);
 
+/* Rewrites the whole file with the given meals. Returns 0 on success. */
+int save_meals(const char *path, const Meal *meals, int n);
+
 #endif

@@ -42,3 +42,12 @@ int append_meal(const char *path, const Meal *m) {
     fclose(fp);
     return 0;
 }
+
+int save_meals(const char *path, const Meal *meals, int n) {
+    FILE *fp = fopen(path, "w");
+    if (!fp) return -1;
+    for (int i = 0; i < n; i++)
+        fprintf(fp, "%s,%s,%d\n", meals[i].date, meals[i].food_name, meals[i].rating);
+    fclose(fp);
+    return 0;
+}
