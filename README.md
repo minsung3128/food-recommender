@@ -17,6 +17,8 @@ Windows may show a SmartScreen warning because the program is not code-signed. C
 - Console menu and Win32 GUI (buttons, list box, drop-down boxes)
 - The GUI starts from the exe's own folder, so a double click or a shortcut works
 - Sortable food table: click a column header to sort (click again to reverse)
+- Edit and delete meal records in the GUI (deleting asks for confirmation)
+- Renaming or deleting a food keeps the meal history consistent
 
 ## 1. Motivation
 TBD
@@ -93,12 +95,8 @@ TBD
 ## 6. Analysis and Discussion
 TBD
 
-### Known Limitations
-- History records refer to foods by name, so renaming or deleting a food leaves its old records unmatched; the recommender ignores them.
-
 ### Planned Work
-- Simulation test mode with a virtual user, to analyze how recommendations change over 30 days
-- Comparison experiments with different scoring constants
+- Manual test scenarios with screenshots for the Results section
 - Remaining report sections
 
 ## 7. References
@@ -134,3 +132,4 @@ gcc -Iinclude src/main.c src/food.c src/meal.c src/recommend.c -o main.exe
 4. Click "오늘의 추천 보기" to see the top 3 recommendations with score details.
 5. Click "기록 보기" to see all saved meals.
 6. To manage foods, click a food, edit the boxes under "음식 관리", and click "선택 수정"; or fill the boxes and click "음식 추가"; or click "선택 삭제".
+7. To fix a meal record, click "기록 보기", click a record, change the date or rating, and click "기록 수정". To remove it, click "기록 삭제" and confirm.
