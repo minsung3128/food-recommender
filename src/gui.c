@@ -9,25 +9,40 @@
 #include "food.h"
 #include "meal.h"
 #include "recommend.h"
+#include "exclude.h"
 
 #define FOODS_PATH   "data/foods.txt"
 #define HISTORY_PATH "data/history.txt"
+#define EXCLUDE_PATH "data/exclude.txt"
 
 enum {
     ID_LIST = 100, ID_RATING, ID_DATE, ID_ADD, ID_REC, ID_HIST,
     ID_F_NAME, ID_F_CAT, ID_F_ING, ID_F_COOK, ID_F_KCAL,
     ID_FADD, ID_FEDIT, ID_FDEL,
-    ID_HLIST, ID_H_DATE, ID_H_RATING, ID_HEDIT, ID_HDEL
+    ID_HLIST, ID_H_DATE, ID_H_RATING, ID_HEDIT, ID_HDEL,
+    ID_EXBTN, ID_EXLIST
 };
+
+typedef struct {
+    int kind;
+    char value[MAX_ATTR];
+    int count;   /* number of foods that have this value */
+} ExRow;
 
 static Food *g_foods = NULL;
 static int g_nf = 0;
 static Meal *g_meals = NULL;
 static int g_nm = 0;
+static Exclusion *g_ex = NULL;
+static int g_nex = 0;
+static ExRow *g_rows = NULL;
+static int g_nrows = 0;
+static int g_building = 0;   /* 1 while the exclusion table is being filled */
 
-static HWND hList, hRating, hDate, hOut;
+static HWND hList, hRating, hDate, hOut, hResLabel;
 static HWND hFName, hFCat, hFIng, hFCook, hFKcal;
 static HWND hHist, hHTitle, hHDate, hHRating;
+static HWND hExcl;
 static int g_sort_col = -1;
 static int g_sort_asc = 1;
 
@@ -51,10 +66,34 @@ static void set_text(HWND h, const char *s) {
     free(w);
 }
 
-/* Shows a message in the result box (and hides the history table). */
+/* ---------- right-hand panel: result box, history table, exclusion table ---------- */
+
+static int count_excluded_foods(void) {
+    int c = 0;
+    for (int i = 0; i < g_nf; i++)
+        if (is_excluded(&g_foods[i], g_ex, g_nex)) c++;
+    return c;
+}
+
+static void excl_label(void) {
+    char t[128];
+    snprintf(t, sizeof t, "기피 설정 (체크=제외, 현재 %d개)", count_excluded_foods());
+    set_text(hResLabel, t);
+}
+
+/* 0 = result box, 1 = history table, 2 = exclusion table */
+static void show_panel(int p) {
+    ShowWindow(hOut, p == 0 ? SW_SHOW : SW_HIDE);
+    ShowWindow(hHist, p == 1 ? SW_SHOW : SW_HIDE);
+    ShowWindow(hExcl, p == 2 ? SW_SHOW : SW_HIDE);
+    if (p == 0) set_text(hResLabel, "결과");
+    else if (p == 1) set_text(hResLabel, "식사 기록 (최근 기록이 위)");
+    else excl_label();
+}
+
+/* Shows a message in the result box. */
 static void say(const char *s) {
-    ShowWindow(hHist, SW_HIDE);
-    ShowWindow(hOut, SW_SHOW);
+    show_panel(0);
     set_text(hOut, s);
 }
 
@@ -264,8 +303,7 @@ static void on_hist(void) {
     refresh_hist(-1);
     set_text(hHDate, "");
     SendMessageW(hHRating, CB_SETCURSEL, 0, 0);
-    ShowWindow(hOut, SW_HIDE);
-    ShowWindow(hHist, SW_SHOW);
+    show_panel(1);
     hnote("기록 관리 (기록을 클릭하세요)");
 }
 
@@ -312,6 +350,84 @@ static void on_hist_del(void) {
     refresh_hist(-1);
     set_text(hHDate, "");
     SendMessageW(hHRating, CB_SETCURSEL, 0, 0);
+}
+
+/* ---------- excluded attributes ---------- */
+
+static int cmp_row(const void *a, const void *b) {
+    const ExRow *x = a, *y = b;
+    if (x->kind != y->kind) return x->kind - y->kind;
+    return strcmp(x->value, y->value);
+}
+
+/* Collects every (kind, value) that appears in the food list. */
+static void build_rows(void) {
+    free(g_rows);
+    g_rows = NULL;
+    g_nrows = 0;
+    int cap = 0;
+
+    for (int i = 0; i < g_nf; i++) {
+        for (int k = 0; k < 3; k++) {
+            const char *v = food_attr(&g_foods[i], k);
+            int found = -1;
+            for (int r = 0; r < g_nrows; r++)
+                if (g_rows[r].kind == k && strcmp(g_rows[r].value, v) == 0) {
+                    found = r;
+                    break;
+                }
+            if (found >= 0) { g_rows[found].count++; continue; }
+
+            if (g_nrows == cap) {
+                cap = cap ? cap * 2 : 32;
+                ExRow *tmp = realloc(g_rows, cap * sizeof(ExRow));
+                if (!tmp) return;
+                g_rows = tmp;
+            }
+            g_rows[g_nrows].kind = k;
+            snprintf(g_rows[g_nrows].value, MAX_ATTR, "%s", v);
+            g_rows[g_nrows].count = 1;
+            g_nrows++;
+        }
+    }
+    qsort(g_rows, g_nrows, sizeof(ExRow), cmp_row);
+}
+
+static void refresh_excl(void) {
+    static const char *kinds[] = { "분류", "재료", "조리법" };
+    build_rows();
+
+    g_building = 1;   /* ignore the check-box events caused by filling */
+    SendMessageW(hExcl, LVM_DELETEALLITEMS, 0, 0);
+    for (int r = 0; r < g_nrows; r++) {
+        char c[16];
+        insert_row(hExcl, r, kinds[g_rows[r].kind]);
+        set_cell(hExcl, r, 1, g_rows[r].value);
+        snprintf(c, sizeof c, "%d개", g_rows[r].count);
+        set_cell(hExcl, r, 2, c);
+
+        if (find_exclusion(g_ex, g_nex, g_rows[r].kind, g_rows[r].value) >= 0) {
+            LVITEMW it;
+            memset(&it, 0, sizeof it);
+            it.stateMask = LVIS_STATEIMAGEMASK;
+            it.state = INDEXTOSTATEIMAGEMASK(2);   /* checked */
+            SendMessageW(hExcl, LVM_SETITEMSTATE, r, (LPARAM)&it);
+        }
+    }
+    g_building = 0;
+}
+
+static void on_excl_toggle(int row, int checked) {
+    if (row < 0 || row >= g_nrows) return;
+    if (set_exclusion(&g_ex, &g_nex, g_rows[row].kind, g_rows[row].value, checked) != 0)
+        return;
+    save_exclusions(EXCLUDE_PATH, g_ex, g_nex);
+    excl_label();
+}
+
+static void on_excl(void) {
+    refresh_excl();
+    show_panel(2);
 }
 
 /* ---------- food management ---------- */
@@ -460,11 +576,18 @@ static void on_add(void) {
 
 static void on_rec(void) {
     Score top[3];
-    int k = recommend(g_foods, g_nf, g_meals, g_nm, top, 3);
-    if (k <= 0) { say("추천할 음식이 없습니다."); return; }
+    int k = recommend_filtered(g_foods, g_nf, g_meals, g_nm, g_ex, g_nex, top, 3);
+    if (k < 0) { say("추천 계산에 실패했습니다."); return; }
+    if (k == 0) { say("추천할 음식이 없습니다.\r\n기피 설정을 확인하세요."); return; }
 
+    int excluded = count_excluded_foods();
     char buf[2048];
-    int pos = snprintf(buf, sizeof buf, "기록 %d건 기준 오늘의 추천\r\n\r\n", g_nm);
+    int pos = snprintf(buf, sizeof buf, "기록 %d건 기준 오늘의 추천\r\n", g_nm);
+    if (excluded > 0)
+        pos += snprintf(buf + pos, sizeof buf - pos,
+                        "(기피 설정으로 음식 %d개 제외)\r\n", excluded);
+    pos += snprintf(buf + pos, sizeof buf - pos, "\r\n");
+
     for (int i = 0; i < k; i++) {
         const Food *f = &g_foods[top[i].food_index];
         pos += snprintf(buf + pos, sizeof buf - pos,
@@ -552,16 +675,24 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         make_button(hwnd, L"오늘의 추천 보기", ID_REC, 610, 75, 130, 34);
         make_button(hwnd, L"기록 보기", ID_HIST, 750, 75, 110, 34);
 
-        /* result box and history table share the same area */
-        make_label(hwnd, L"결과", 480, 125, 100);
+        /* result box, history table and exclusion table share one area */
+        hResLabel = make_label(hwnd, L"결과", 480, 125, 390);
         hOut = CreateWindowExW(0, L"EDIT", NULL,
             WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
             ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
             480, 147, 380, 263, hwnd, NULL, NULL, NULL);
+
         hHist = make_table(hwnd, ID_HLIST, 480, 147, 380, 263, 0);
         static const wchar_t *hcols[] = { L"날짜", L"음식", L"별점" };
         static const int hwidths[] = { 100, 180, 70 };
         add_columns(hHist, hcols, hwidths, 3);
+
+        hExcl = make_table(hwnd, ID_EXLIST, 480, 147, 380, 263, 0);
+        SendMessageW(hExcl, LVM_SETEXTENDEDLISTVIEWSTYLE,
+                     LVS_EX_CHECKBOXES, LVS_EX_CHECKBOXES);
+        static const wchar_t *xcols[] = { L"구분", L"이름", L"음식 수" };
+        static const int xwidths[] = { 110, 140, 80 };
+        add_columns(hExcl, xcols, xwidths, 3);
 
         /* food management */
         make_label(hwnd, L"음식 관리 (목록에서 음식을 클릭하면 아래 칸에 채워집니다)",
@@ -579,6 +710,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         make_button(hwnd, L"음식 추가", ID_FADD, 10, 505, 110, 34);
         make_button(hwnd, L"선택 수정", ID_FEDIT, 130, 505, 110, 34);
         make_button(hwnd, L"선택 삭제", ID_FDEL, 250, 505, 110, 34);
+        make_button(hwnd, L"기피 설정", ID_EXBTN, 380, 505, 110, 34);
 
         /* history management */
         hHTitle = make_label(hwnd, L"기록 관리 (기록 보기에서 클릭)", 580, 420, 290);
@@ -609,6 +741,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         refresh_list(-1);
         reload_history();
+        g_nex = load_exclusions(EXCLUDE_PATH, &g_ex);
+        if (g_nex < 0) g_nex = 0;
 
         HFONT font = CreateFontW(-16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -630,6 +764,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (nh->code == LVN_ITEMCHANGED &&
                 (nl->uChanged & LVIF_STATE) && (nl->uNewState & LVIS_SELECTED))
                 fill_hist_fields(nl->iItem);
+        } else if (nh->hwndFrom == hExcl) {
+            if (nh->code == LVN_ITEMCHANGED && !g_building &&
+                (nl->uChanged & LVIF_STATE) &&
+                ((nl->uNewState ^ nl->uOldState) & LVIS_STATEIMAGEMASK))
+                on_excl_toggle(nl->iItem,
+                               ((nl->uNewState & LVIS_STATEIMAGEMASK) >> 12) == 2);
         }
         return 0;
     }
@@ -643,11 +783,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case ID_FDEL:  on_food_del();  break;
         case ID_HEDIT: on_hist_edit(); break;
         case ID_HDEL:  on_hist_del();  break;
+        case ID_EXBTN: on_excl();      break;
         }
         return 0;
     case WM_DESTROY:
         free(g_foods);
         free(g_meals);
+        free(g_ex);
+        free(g_rows);
         PostQuitMessage(0);
         return 0;
     }

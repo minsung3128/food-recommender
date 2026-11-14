@@ -5,9 +5,12 @@
 #include <windows.h>
 #include "food.h"
 #include "meal.h"
+#include "recommend.h"
+#include "exclude.h"
 
 #define FOODS_PATH   "data/foods.txt"
 #define HISTORY_PATH "data/history.txt"
+#define EXCLUDE_PATH "data/exclude.txt"
 
 static int read_int(const char *prompt) {
     char buf[64];
@@ -66,6 +69,56 @@ static void show_history(void) {
     free(meals);
 }
 
+static void show_recommendation(const Food *foods, int n) {
+    Meal *meals = NULL;
+    int nm = load_meals(HISTORY_PATH, &meals);
+    if (nm < 0) { printf("기록을 불러오지 못했습니다.\n"); return; }
+
+    Exclusion *ex = NULL;
+    int nex = load_exclusions(EXCLUDE_PATH, &ex);
+    if (nex < 0) nex = 0;
+
+    int excluded = 0;
+    for (int i = 0; i < n; i++)
+        if (is_excluded(&foods[i], ex, nex)) excluded++;
+
+    Score top[3];
+    int k = recommend_filtered(foods, n, meals, nm, ex, nex, top, 3);
+    if (k <= 0) {
+        printf("추천할 음식이 없습니다. 기피 설정을 확인하세요.\n");
+        free(meals);
+        free(ex);
+        return;
+    }
+
+    printf("\n오늘의 추천 (기록 %d건 기준", nm);
+    if (excluded > 0) printf(", 기피 설정으로 음식 %d개 제외", excluded);
+    printf(")\n");
+    for (int i = 0; i < k; i++) {
+        const Food *f = &foods[top[i].food_index];
+        printf("%d위: %s (%s, %s, %s) 총점 %.2f\n", i + 1,
+               f->name, f->category, f->ingredient, f->cooking, top[i].total);
+        printf("     취향 %+.2f | 어제 %+.2f | 최근 %+.2f | 탐험 %+.2f\n",
+               top[i].taste, top[i].yesterday, top[i].recent, top[i].explore);
+    }
+    free(meals);
+    free(ex);
+}
+
+static void show_exclusions(void) {
+    static const char *kinds[] = { "분류", "재료", "조리법" };
+    Exclusion *ex = NULL;
+    int n = load_exclusions(EXCLUDE_PATH, &ex);
+    if (n <= 0) {
+        printf("기피 설정이 없습니다. (설정은 GUI에서 바꿀 수 있습니다)\n");
+        free(ex);
+        return;
+    }
+    for (int i = 0; i < n; i++)
+        printf("%s: %s\n", kinds[ex[i].kind], ex[i].value);
+    free(ex);
+}
+
 int main(void) {
     SetConsoleOutputCP(65001);
     SetConsoleCP(65001);
@@ -76,12 +129,15 @@ int main(void) {
 
     for (;;) {
         printf("\n[음식 추천 프로그램]\n");
-        printf("1. 음식 목록\n2. 식사 기록 추가\n3. 식사 기록 보기\n0. 종료\n");
+        printf("1. 음식 목록\n2. 식사 기록 추가\n3. 식사 기록 보기\n"
+               "4. 오늘의 추천\n5. 기피 설정 보기\n0. 종료\n");
         int menu = read_int("선택: ");
         if (menu == 0) break;
         else if (menu == 1) list_foods(foods, n);
         else if (menu == 2) record_meal(foods, n);
         else if (menu == 3) show_history();
+        else if (menu == 4) show_recommendation(foods, n);
+        else if (menu == 5) show_exclusions();
         else printf("잘못된 선택입니다.\n");
     }
 
